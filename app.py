@@ -1,18 +1,18 @@
-import streamlit as st 
+import streamlit as st
 import os
 import faiss
 import numpy as np
-from pypdf import PdfReader
+from docx import Document
 from sentence_transformers import SentenceTransformer
 
 # ---------- CONFIG ----------
-DOCS_FOLDER = "Docs"
+DOCS_FOLDER = "Docs"   # Place .docx files here
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 TOP_K = 6
 # ---------------------------
 
-st.set_page_config(page_title="Student Handbook Assistant", layout="centered")
+st.set_page_config(page_title="Student Information Book Assistant", layout="centered")
 
 st.title("📘 Student Information Book Assistant")
 st.write("Ask questions based on the Student Information Book (PGDM 2025–26)")
@@ -21,24 +21,23 @@ st.write("Ask questions based on the Student Information Book (PGDM 2025–26)")
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-if "question_input" not in st.session_state:
-    st.session_state.question_input = ""
-
+# ---------- MODEL ----------
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
+# ---------- LOAD & INDEX DOCUMENTS ----------
 @st.cache_resource
 def load_system():
     texts = []
+
     for file in os.listdir(DOCS_FOLDER):
-        if file.endswith(".pdf"):
-            reader = PdfReader(os.path.join(DOCS_FOLDER, file))
-            for page in reader.pages:
-                text = page.extract_text()
+        if file.endswith(".docx"):
+            doc = Document(os.path.join(DOCS_FOLDER, file))
+            for para in doc.paragraphs:
+                text = para.text.strip()
                 if text:
-                    text = text.replace("\n", " ")
-                    text = " ".join(text.split())
                     texts.append(text)
 
+    # Chunking
     chunks = []
     for text in texts:
         start = 0
@@ -57,56 +56,51 @@ def load_system():
 
 index, chunks = load_system()
 
+# ---------- ANSWER LOGIC ----------
 def answer_question(question):
-    if "what is this document about" in question.lower() or "objective" in question.lower():
+    q_lower = question.lower()
+
+    # Manual override for overview questions
+    if "what is this document about" in q_lower or "objective" in q_lower:
         return (
             "This document is a Student Information Book for the PGDM programme (2025–26) at SDMIMD. "
-            "It explains the academic structure, rules and regulations, evaluation methods, code of conduct, "
-            "disciplinary policies, projects, and general institutional information required during the programme."
+            "It provides details about programme structure, academic requirements, evaluation methods, "
+            "code of conduct, disciplinary policies, projects and internships, fee structure, "
+            "and general institutional information."
         )
 
     q_vector = model.encode([question])
     _, idx = index.search(np.array(q_vector).astype("float32"), TOP_K)
 
-    retrieved = " ".join([chunks[i] for i in idx[0]])
-    sentences = [s.strip() for s in retrieved.split(". ") if len(s.strip()) > 60]
+    retrieved_text = " ".join([chunks[i] for i in idx[0]])
+    sentences = [s.strip() for s in retrieved_text.split(". ") if len(s.strip()) > 60]
 
     return ". ".join(sentences[:5])
 
-# ---------- CALLBACK (THIS IS THE FIX) ----------
-def handle_ask():
-    question = st.session_state.question_input
+# ---------- INPUT FORM (KEY FIX) ----------
+with st.form("question_form", clear_on_submit=True):
+    question = st.text_input("🔍 Enter your question:")
+    submitted = st.form_submit_button("Ask")
 
-    if question:
-        answer = answer_question(question)
+    if submitted and question:
+        with st.spinner("Searching the document..."):
+            answer = answer_question(question)
 
         st.session_state.chat_history.append({
             "question": question,
             "answer": answer
         })
 
-        # ✅ SAFE CLEAR
-        st.session_state.question_input = ""
-    else:
-        st.warning("Please enter a question.")
-
-# ---------- UI ----------
-st.text_input("🔍 Enter your question:", key="question_input")
-
-st.button("Ask", on_click=handle_ask)
-
+# ---------- OPTIONAL CLEAR CHAT ----------
 if st.button("Clear chat"):
     st.session_state.chat_history = []
 
+# ---------- DISPLAY CHAT ----------
 st.divider()
 
-# ---------- DISPLAY CHAT ----------
 for chat in st.session_state.chat_history:
     st.markdown("### ❓ Question")
     st.write(chat["question"])
 
     st.markdown("### ✅ Answer")
     st.write(chat["answer"])
-
-
-
